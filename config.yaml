@@ -27,7 +27,7 @@ pv_system:
   # - physics: Use physics-based calculations only (no training needed)
   # - ml: Use trained XGBoost model (requires historical data)
   # - hybrid: Use ML if model exists, fallback to physics
-  model_type: "physics"
+  model_type: "hybrid"
 
 # Load Profile Configuration
 load_profile:
@@ -35,7 +35,7 @@ load_profile:
   # - profile: Use configured hourly pattern (no training needed)
   # - ml: Use trained XGBoost model (requires historical data)
   # - hybrid: Use ML if model exists, fallback to profile
-  model_type: "profile"
+  model_type: "hybrid"
 
   # Base load in MW
   base_load_mw: 3.0
