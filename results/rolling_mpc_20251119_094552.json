@@ -1,0 +1,62 @@
+[
+  {
+    "optimization_num": 1,
+    "timestamp": "2025-11-19 09:45:51.588785",
+    "soc_before": 0.5,
+    "soc_after": 0.5,
+    "battery_charge_mw": 0.0,
+    "battery_discharge_mw": 0.0,
+    "grid_import_mw": 4.1151,
+    "grid_export_mw": 0.0,
+    "pv_forecast_mw": 0.0,
+    "load_forecast_mw": 4.1151,
+    "price_per_kwh": 0.12,
+    "horizon_cost": 26980.701263157895,
+    "horizon_peak": 4.404262500000001
+  },
+  {
+    "optimization_num": 2,
+    "timestamp": "2025-11-19 09:45:52.366579",
+    "soc_before": 0.5,
+    "soc_after": 0.5,
+    "battery_charge_mw": 0.0,
+    "battery_discharge_mw": 0.0,
+    "grid_import_mw": 4.1151,
+    "grid_export_mw": 0.0,
+    "pv_forecast_mw": 0.0,
+    "load_forecast_mw": 4.1151,
+    "price_per_kwh": 0.12,
+    "horizon_cost": 26980.701263157895,
+    "horizon_peak": 4.404262500000001
+  },
+  {
+    "optimization_num": 3,
+    "timestamp": "2025-11-19 09:45:52.412983",
+    "soc_before": 0.5,
+    "soc_after": 0.5,
+    "battery_charge_mw": 0.0,
+    "battery_discharge_mw": 0.0,
+    "grid_import_mw": 4.1151,
+    "grid_export_mw": 0.0,
+    "pv_forecast_mw": 0.0,
+    "load_forecast_mw": 4.1151,
+    "price_per_kwh": 0.12,
+    "horizon_cost": 26980.701263157895,
+    "horizon_peak": 4.404262500000001
+  },
+  {
+    "optimization_num": 4,
+    "timestamp": "2025-11-19 09:45:52.458352",
+    "soc_before": 0.5,
+    "soc_after": 0.5,
+    "battery_charge_mw": 0.0,
+    "battery_discharge_mw": 0.0,
+    "grid_import_mw": 4.1151,
+    "grid_export_mw": 0.0,
+    "pv_forecast_mw": 0.0,
+    "load_forecast_mw": 4.1151,
+    "price_per_kwh": 0.12,
+    "horizon_cost": 26980.701263157895,
+    "horizon_peak": 4.404262500000001
+  }
+]

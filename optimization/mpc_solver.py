@@ -87,6 +87,7 @@ def build_optimization_model(data, horizon=None):
     SOC_MIN = battery.get('soc_min', 0.2)
     SOC_MAX = battery.get('soc_max', 0.9)
     SOC_INITIAL = battery.get('soc_initial', 0.5)
+    CYCLE_COST = battery.get('cycle_cost_per_kwh', 0.02)  # $/kWh degradation cost
 
     # Get optimization parameters
     opt_config = config.optimization
@@ -153,6 +154,12 @@ def build_optimization_model(data, horizon=None):
             proration_factor = horizon_days / BILLING_PERIOD_DAYS
             demand_cost = DEMAND_CHARGE_RATE * 1000 * m.peak_demand * proration_factor
             total_cost += demand_cost
+
+        # Battery degradation cost (based on energy throughput)
+        # Cost per MWh = cycle_cost_per_kwh * 1000
+        for t in T:
+            degradation_cost = CYCLE_COST * 1000 * (m.battery_charge[t] + m.battery_discharge[t]) * dt
+            total_cost += degradation_cost
 
         return total_cost
 
@@ -287,12 +294,18 @@ def calculate_kpis(results_df):
     DEMAND_CHARGE_RATE = demand_charge_config.get('rate_per_kw', 15.0)
     BILLING_PERIOD_DAYS = demand_charge_config.get('billing_period_days', 30)
     EXPORT_PRICE_RATIO = config.optimization.get('export_price_ratio', 0.5)
+    CYCLE_COST = config.battery.get('cycle_cost_per_kwh', 0.02)
 
     # Total energy
     total_pv = results_df['pv_forecast_mw'].sum() * dt
     total_load = results_df['load_forecast_mw'].sum() * dt
     total_import = results_df['grid_import_mw'].sum() * dt
     total_export = results_df['grid_export_mw'].sum() * dt
+
+    # Battery throughput
+    total_charge = results_df['battery_charge_mw'].sum() * dt
+    total_discharge = results_df['battery_discharge_mw'].sum() * dt
+    battery_throughput = total_charge + total_discharge
 
     # Energy cost calculation
     energy_cost = (results_df['grid_import_mw'] * results_df['price_per_kwh'] * 1000 * dt).sum()
@@ -309,7 +322,10 @@ def calculate_kpis(results_df):
     else:
         demand_charge = 0
 
-    net_cost = energy_cost - export_revenue + demand_charge
+    # Battery degradation cost
+    degradation_cost = CYCLE_COST * battery_throughput * 1000  # $/kWh * MWh * 1000
+
+    net_cost = energy_cost - export_revenue + demand_charge + degradation_cost
 
     # Carbon calculation
     total_carbon = (results_df['grid_import_mw'] * results_df['carbon_intensity'] * dt).sum()
@@ -326,9 +342,11 @@ def calculate_kpis(results_df):
         'total_load_mwh': total_load,
         'total_import_mwh': total_import,
         'total_export_mwh': total_export,
+        'battery_throughput_mwh': battery_throughput,
         'energy_cost_usd': energy_cost,
         'export_revenue_usd': export_revenue,
         'demand_charge_usd': demand_charge,
+        'degradation_cost_usd': degradation_cost,
         'net_cost_usd': net_cost,
         'total_carbon_kg': total_carbon,
         'self_consumption_rate': self_consumption_rate,
@@ -391,9 +409,11 @@ def main():
     print(f"  Total Load:             {kpis['total_load_mwh']:.2f} MWh")
     print(f"  Grid Import:            {kpis['total_import_mwh']:.2f} MWh")
     print(f"  Grid Export:            {kpis['total_export_mwh']:.2f} MWh")
+    print(f"  Battery Throughput:     {kpis['battery_throughput_mwh']:.2f} MWh")
     print(f"\n  Energy Cost:            ${kpis['energy_cost_usd']:.2f}")
     print(f"  Export Revenue:         ${kpis['export_revenue_usd']:.2f}")
     print(f"  Demand Charge:          ${kpis['demand_charge_usd']:.2f}")
+    print(f"  Degradation Cost:       ${kpis['degradation_cost_usd']:.2f}")
     print(f"  Net Cost:               ${kpis['net_cost_usd']:.2f}")
     print(f"\n  Carbon Emissions:       {kpis['total_carbon_kg']:.2f} kg CO2")
     print(f"  Self-Consumption Rate:  {kpis['self_consumption_rate']:.1f}%")
