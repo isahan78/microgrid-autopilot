@@ -2,21 +2,25 @@
 Streamlit dashboard for Microgrid Autopilot.
 
 Visualizes forecasts, battery SOC, grid flows, and KPIs.
-Includes demand charge analysis and cost breakdown.
+Supports both historical data and live API forecasting.
 """
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
+from datetime import datetime, timedelta
 import sys
+import joblib
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.config import get_config
+from utils.weather_api import fetch_weather_forecast, resample_to_15min
 
 # Load configuration
 config = get_config()
@@ -24,6 +28,7 @@ config = get_config()
 # Paths
 PROJECT_DIR = Path(__file__).parent.parent
 PROCESSED_DIR = PROJECT_DIR / config.paths.get('data_processed', 'data_processed')
+MODELS_DIR = PROJECT_DIR / config.paths.get('models', 'models')
 
 
 def load_data():
@@ -78,28 +83,175 @@ def load_data():
     return data
 
 
-def plot_pv_forecast(data):
+def run_live_forecast(horizon_hours=48):
+    """
+    Run live forecasting with real-time weather data.
+
+    Returns optimization results based on current weather conditions.
+    """
+    from optimization.mpc_solver import (
+        build_optimization_model, solve_optimization,
+        extract_results, calculate_kpis
+    )
+
+    # Fetch live weather
+    weather_df = fetch_weather_forecast(
+        forecast_days=min(horizon_hours // 24 + 1, 16)
+    )
+
+    if weather_df is None:
+        st.error("Failed to fetch weather data")
+        return None
+
+    weather_df = resample_to_15min(weather_df)
+
+    # Generate PV forecast from weather
+    # PV output = GHI * panel_efficiency * system_size
+    # Assuming ~11 MW peak system, ~15% efficiency
+    pv_forecast = weather_df.copy()
+    pv_forecast['forecast_pv_mw'] = (pv_forecast['ghi'] / 1000) * 11 * 0.15
+    pv_forecast['forecast_pv_mw'] = pv_forecast['forecast_pv_mw'].clip(lower=0)
+
+    # Generate load forecast based on typical profile
+    # Base load with time-of-day variation
+    hours = pv_forecast['timestamp'].dt.hour
+
+    # Typical commercial/industrial load profile
+    base_load = 3.5  # MW base load
+    load_profile = np.where(
+        (hours >= 8) & (hours <= 18),
+        base_load * 1.3,  # Daytime peak
+        np.where(
+            (hours >= 18) & (hours <= 22),
+            base_load * 1.1,  # Evening
+            base_load * 0.7   # Night
+        )
+    )
+
+    # Add some variation
+    np.random.seed(42)
+    noise = np.random.normal(0, 0.1, len(load_profile))
+    pv_forecast['forecast_load_mw'] = load_profile + noise
+    pv_forecast['forecast_load_mw'] = pv_forecast['forecast_load_mw'].clip(lower=1.0)
+
+    # Generate tariff data (TOU pricing)
+    tariff_config = config.get('tariff', default={}) or {}
+
+    def get_price(hour):
+        peak = tariff_config.get('peak', {})
+        off_peak = tariff_config.get('off_peak', {})
+        mid_peak = tariff_config.get('mid_peak', {})
+
+        peak_hours = peak.get('hours', [17, 22])
+        off_peak_hours = off_peak.get('hours', [0, 17])
+
+        if peak_hours[0] <= hour < peak_hours[1]:
+            return peak.get('price_per_kwh', 0.30)
+        elif off_peak_hours[0] <= hour < off_peak_hours[1]:
+            return off_peak.get('price_per_kwh', 0.12)
+        else:
+            return mid_peak.get('price_per_kwh', 0.15)
+
+    pv_forecast['price_per_kwh'] = pv_forecast['timestamp'].dt.hour.apply(get_price)
+
+    # Carbon intensity with time-varying multipliers
+    carbon_config = config.get('carbon', default={}) or {}
+    base_intensity = carbon_config.get('default_intensity', 410)
+    hourly_multipliers = carbon_config.get('hourly_multipliers', {})
+
+    def get_carbon(hour):
+        multiplier = hourly_multipliers.get(hour, hourly_multipliers.get(str(hour), 1.0))
+        return base_intensity * multiplier
+
+    pv_forecast['carbon_intensity'] = pv_forecast['timestamp'].dt.hour.apply(get_carbon)
+
+    # Prepare data for optimization
+    data = pv_forecast[['timestamp', 'forecast_pv_mw', 'forecast_load_mw',
+                        'price_per_kwh', 'carbon_intensity']].copy()
+
+    horizon = min(len(data), horizon_hours * 4)  # 4 intervals per hour
+
+    # Build and solve optimization
+    model = build_optimization_model(data, horizon)
+    solved_model = solve_optimization(model)
+
+    if solved_model is None:
+        st.error("Optimization failed")
+        return None
+
+    # Extract results
+    results_df = extract_results(solved_model, data, horizon)
+    kpis = calculate_kpis(results_df)
+
+    return {
+        'weather': weather_df,
+        'results': results_df,
+        'kpis': kpis,
+        'data': data
+    }
+
+
+def create_live_power_flow(results_df):
+    """Create power flow dataframe from optimization results."""
+    power_flow = pd.DataFrame({
+        'timestamp': results_df['timestamp'],
+        'pv_mw': results_df['pv_forecast_mw'],
+        'load_mw': results_df['load_forecast_mw'],
+        'battery_charge_mw': results_df['battery_charge_mw'],
+        'battery_discharge_mw': results_df['battery_discharge_mw'],
+        'grid_import_mw': results_df['grid_import_mw'],
+        'grid_export_mw': results_df['grid_export_mw'],
+        'price_per_kwh': results_df['price_per_kwh'],
+        'carbon_intensity': results_df['carbon_intensity']
+    })
+
+    # Calculate carbon emissions
+    dt = 0.25  # 15 min intervals
+    power_flow['carbon_emissions_kg'] = (
+        power_flow['grid_import_mw'] * power_flow['carbon_intensity'] * dt
+    )
+
+    return power_flow
+
+
+def plot_pv_forecast(data, live_mode=False):
     """Plot PV forecast vs actual."""
-    if 'pv_forecast' not in data:
-        st.warning("PV forecast data not available")
-        return
+    if live_mode:
+        if 'results' not in data:
+            st.warning("Live results not available")
+            return
+        df = data['results']
 
-    df = data['pv_forecast']
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['timestamp'], y=df['pv_forecast_mw'],
+            name='PV Forecast', mode='lines',
+            fill='tozeroy',
+            line=dict(color='orange', width=2)
+        ))
+        title = 'PV Generation Forecast (Live Weather)'
+    else:
+        if 'pv_forecast' not in data:
+            st.warning("PV forecast data not available")
+            return
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=df['actual_pv_mw'],
-        name='Actual', mode='lines',
-        line=dict(color='orange', width=2)
-    ))
-    fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=df['forecast_pv_mw'],
-        name='Forecast', mode='lines',
-        line=dict(color='blue', width=2, dash='dash')
-    ))
+        df = data['pv_forecast']
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['timestamp'], y=df['actual_pv_mw'],
+            name='Actual', mode='lines',
+            line=dict(color='orange', width=2)
+        ))
+        fig.add_trace(go.Scatter(
+            x=df['timestamp'], y=df['forecast_pv_mw'],
+            name='Forecast', mode='lines',
+            line=dict(color='blue', width=2, dash='dash')
+        ))
+        title = 'PV Generation: Forecast vs Actual'
 
     fig.update_layout(
-        title='PV Generation: Forecast vs Actual',
+        title=title,
         xaxis_title='Time',
         yaxis_title='Power (MW)',
         legend=dict(orientation='h', yanchor='bottom', y=1.02),
@@ -109,28 +261,44 @@ def plot_pv_forecast(data):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_load_forecast(data):
+def plot_load_forecast(data, live_mode=False):
     """Plot load forecast vs actual."""
-    if 'load_forecast' not in data:
-        st.warning("Load forecast data not available")
-        return
+    if live_mode:
+        if 'results' not in data:
+            st.warning("Live results not available")
+            return
+        df = data['results']
 
-    df = data['load_forecast']
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['timestamp'], y=df['load_forecast_mw'],
+            name='Load Forecast', mode='lines',
+            fill='tozeroy',
+            line=dict(color='red', width=2)
+        ))
+        title = 'Load Demand Forecast (Live)'
+    else:
+        if 'load_forecast' not in data:
+            st.warning("Load forecast data not available")
+            return
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=df['actual_load_mw'],
-        name='Actual', mode='lines',
-        line=dict(color='red', width=2)
-    ))
-    fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=df['forecast_load_mw'],
-        name='Forecast', mode='lines',
-        line=dict(color='purple', width=2, dash='dash')
-    ))
+        df = data['load_forecast']
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['timestamp'], y=df['actual_load_mw'],
+            name='Actual', mode='lines',
+            line=dict(color='red', width=2)
+        ))
+        fig.add_trace(go.Scatter(
+            x=df['timestamp'], y=df['forecast_load_mw'],
+            name='Forecast', mode='lines',
+            line=dict(color='purple', width=2, dash='dash')
+        ))
+        title = 'Load Demand: Forecast vs Actual'
 
     fig.update_layout(
-        title='Load Demand: Forecast vs Actual',
+        title=title,
         xaxis_title='Time',
         yaxis_title='Power (MW)',
         legend=dict(orientation='h', yanchor='bottom', y=1.02),
@@ -140,13 +308,18 @@ def plot_load_forecast(data):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_battery_soc(data):
+def plot_battery_soc(data, live_mode=False):
     """Plot battery SOC over time."""
-    if 'optimization' not in data:
-        st.warning("Optimization data not available")
-        return
-
-    df = data['optimization']
+    if live_mode:
+        if 'results' not in data:
+            st.warning("Live results not available")
+            return
+        df = data['results']
+    else:
+        if 'optimization' not in data:
+            st.warning("Optimization data not available")
+            return
+        df = data['optimization']
 
     # Get SOC limits from config
     soc_min = config.battery.get('soc_min', 0.2) * 100
@@ -177,13 +350,18 @@ def plot_battery_soc(data):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_grid_flows(data):
+def plot_grid_flows(data, live_mode=False):
     """Plot grid import/export with peak demand highlight."""
-    if 'power_flow' not in data:
-        st.warning("Power flow data not available")
-        return
-
-    df = data['power_flow']
+    if live_mode:
+        if 'results' not in data:
+            st.warning("Live results not available")
+            return
+        df = data['results']
+    else:
+        if 'power_flow' not in data:
+            st.warning("Power flow data not available")
+            return
+        df = data['power_flow']
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -215,13 +393,49 @@ def plot_grid_flows(data):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_tariff_and_carbon(data):
-    """Plot tariff prices and carbon intensity over time."""
-    if 'tariff' not in data:
-        st.warning("Tariff data not available")
-        return
+def plot_weather_conditions(weather_df):
+    """Plot weather conditions from live API."""
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        subplot_titles=('Solar Irradiance', 'Temperature'))
 
-    df = data['tariff']
+    # GHI and DNI
+    fig.add_trace(
+        go.Scatter(x=weather_df['timestamp'], y=weather_df['ghi'],
+                   name='GHI', line=dict(color='orange')),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=weather_df['timestamp'], y=weather_df['dni'],
+                   name='DNI', line=dict(color='red', dash='dash')),
+        row=1, col=1
+    )
+
+    # Temperature
+    fig.add_trace(
+        go.Scatter(x=weather_df['timestamp'], y=weather_df['temperature'],
+                   name='Temperature', line=dict(color='blue')),
+        row=2, col=1
+    )
+
+    fig.update_layout(height=500, showlegend=True)
+    fig.update_yaxes(title_text="W/m²", row=1, col=1)
+    fig.update_yaxes(title_text="°C", row=2, col=1)
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def plot_tariff_and_carbon(data, live_mode=False):
+    """Plot tariff prices and carbon intensity over time."""
+    if live_mode:
+        if 'results' not in data:
+            st.warning("Live results not available")
+            return
+        df = data['results']
+    else:
+        if 'tariff' not in data:
+            st.warning("Tariff data not available")
+            return
+        df = data['tariff']
 
     # Create subplot with secondary y-axis
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -236,18 +450,16 @@ def plot_tariff_and_carbon(data):
         secondary_y=False
     )
 
-    # Carbon intensity if available
-    if 'optimization' in data:
-        opt_df = data['optimization']
-        if 'carbon_intensity' in opt_df.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=opt_df['timestamp'], y=opt_df['carbon_intensity'],
-                    name='Carbon Intensity', mode='lines',
-                    line=dict(color='gray', width=2, dash='dash')
-                ),
-                secondary_y=True
-            )
+    # Carbon intensity
+    if 'carbon_intensity' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['timestamp'], y=df['carbon_intensity'],
+                name='Carbon Intensity', mode='lines',
+                line=dict(color='gray', width=2, dash='dash')
+            ),
+            secondary_y=True
+        )
 
     fig.update_layout(
         title='Electricity Tariff & Carbon Intensity',
@@ -261,19 +473,28 @@ def plot_tariff_and_carbon(data):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_power_balance(data):
+def plot_power_balance(data, live_mode=False):
     """Plot power balance stacked area chart."""
-    if 'power_flow' not in data:
-        st.warning("Power flow data not available")
-        return
-
-    df = data['power_flow']
+    if live_mode:
+        if 'results' not in data:
+            st.warning("Live results not available")
+            return
+        df = data['results']
+        pv_col = 'pv_forecast_mw'
+        load_col = 'load_forecast_mw'
+    else:
+        if 'power_flow' not in data:
+            st.warning("Power flow data not available")
+            return
+        df = data['power_flow']
+        pv_col = 'pv_mw'
+        load_col = 'load_mw'
 
     fig = go.Figure()
 
     # Add traces for each power component
     fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=df['pv_mw'],
+        x=df['timestamp'], y=df[pv_col],
         name='PV Generation', mode='lines',
         stackgroup='positive',
         line=dict(color='orange')
@@ -293,7 +514,7 @@ def plot_power_balance(data):
 
     # Load as negative
     fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=-df['load_mw'],
+        x=df['timestamp'], y=-df[load_col],
         name='Load', mode='lines',
         line=dict(color='red', width=3)
     ))
@@ -333,12 +554,21 @@ def plot_cost_breakdown(energy_cost, export_revenue, demand_charge):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def calculate_kpis(data):
+def calculate_kpis(data, live_mode=False):
     """Calculate and display KPIs with demand charge breakdown."""
-    if 'power_flow' not in data:
-        return
+    if live_mode:
+        if 'results' not in data:
+            return
+        df = data['results']
+        pv_col = 'pv_forecast_mw'
+        load_col = 'load_forecast_mw'
+    else:
+        if 'power_flow' not in data:
+            return
+        df = data['power_flow']
+        pv_col = 'pv_mw'
+        load_col = 'load_mw'
 
-    df = data['power_flow']
     dt = 0.25  # 15 minutes
 
     # Get config values
@@ -349,18 +579,23 @@ def calculate_kpis(data):
     EXPORT_PRICE_RATIO = config.optimization.get('export_price_ratio', 0.5)
 
     # Calculate metrics
-    total_pv = df['pv_mw'].sum() * dt
-    total_load = df['load_mw'].sum() * dt
+    total_pv = df[pv_col].sum() * dt
+    total_load = df[load_col].sum() * dt
     total_import = df['grid_import_mw'].sum() * dt
     total_export = df['grid_export_mw'].sum() * dt
-    total_carbon = df['carbon_emissions_kg'].sum()
+
+    # Carbon emissions
+    if 'carbon_intensity' in df.columns:
+        total_carbon = (df['grid_import_mw'] * df['carbon_intensity'] * dt).sum()
+    else:
+        total_carbon = 0
 
     # Cost calculations
     if 'price_per_kwh' in df.columns:
         energy_cost = (df['grid_import_mw'] * df['price_per_kwh'] * 1000 * dt).sum()
         export_revenue = (df['grid_export_mw'] * df['price_per_kwh'] * 1000 * EXPORT_PRICE_RATIO * dt).sum()
     else:
-        energy_cost = df['net_cost_usd'].sum()
+        energy_cost = 0
         export_revenue = 0
 
     # Demand charge calculation
@@ -416,7 +651,7 @@ def calculate_kpis(data):
             st.metric(
                 "Demand Charge",
                 f"${demand_charge:.2f}",
-                help=f"${DEMAND_CHARGE_RATE}/kW-month × {peak_demand*1000:.0f} kW × {proration_factor:.2f}"
+                help=f"${DEMAND_CHARGE_RATE}/kW-month x {peak_demand*1000:.0f} kW x {proration_factor:.2f}"
             )
         else:
             st.metric("Demand Charge", "Disabled")
@@ -457,6 +692,11 @@ def show_configuration():
     st.sidebar.text(f"Rate: ${demand.get('rate_per_kw')}/kW-month")
     st.sidebar.text(f"Peak Window: {demand.get('peak_window_start')}:00 - {demand.get('peak_window_end')}:00")
 
+    weather = config.get('weather', default={}) or {}
+    st.sidebar.subheader("Location")
+    st.sidebar.text(f"Lat: {weather.get('latitude', 32.65)}")
+    st.sidebar.text(f"Lon: {weather.get('longitude', -117.15)}")
+
 
 def main():
     """Main dashboard application."""
@@ -467,59 +707,128 @@ def main():
     )
 
     st.title("Microgrid Autopilot Dashboard")
+
+    # Mode selection
+    mode = st.radio(
+        "Data Source",
+        ["Historical Data", "Live Forecast"],
+        horizontal=True,
+        help="Historical uses pre-processed data. Live fetches real-time weather and runs optimization."
+    )
+
     st.markdown("---")
 
     # Show configuration in sidebar
     show_configuration()
 
-    # Load data
-    data = load_data()
+    live_mode = mode == "Live Forecast"
 
-    if not data:
-        st.warning("No data available. Please run the pipeline first.")
-        st.code("python data_prep/process_data.py\n"
-                "python forecasting/pv_forecast.py\n"
-                "python forecasting/load_forecast.py\n"
-                "python optimization/mpc_solver.py\n"
-                "python simulation/power_flow.py")
-        return
+    if live_mode:
+        # Live mode with API forecasting
+        st.sidebar.markdown("---")
+        horizon = st.sidebar.slider("Forecast Horizon (hours)", 12, 48, 48)
 
-    # KPIs Section
-    st.header("Key Performance Indicators")
-    kpis = calculate_kpis(data)
-    st.markdown("---")
+        if st.sidebar.button("Run Live Forecast", type="primary"):
+            with st.spinner("Fetching weather and running optimization..."):
+                live_data = run_live_forecast(horizon_hours=horizon)
+                if live_data:
+                    st.session_state['live_data'] = live_data
+                    st.success(f"Live forecast complete! Horizon: {horizon} hours")
 
-    # Forecasts Section
-    st.header("Forecasts")
-    col1, col2 = st.columns(2)
-    with col1:
-        plot_pv_forecast(data)
-    with col2:
-        plot_load_forecast(data)
+        # Check if we have live data
+        if 'live_data' not in st.session_state:
+            st.info("Click 'Run Live Forecast' in the sidebar to fetch real-time weather and run optimization.")
+            return
 
-    st.markdown("---")
+        data = st.session_state['live_data']
 
-    # Battery and Grid Section
-    st.header("Battery & Grid Operations")
-    col1, col2 = st.columns(2)
-    with col1:
-        plot_battery_soc(data)
-    with col2:
-        plot_grid_flows(data)
+        # Show weather conditions
+        st.header("Live Weather Conditions")
+        plot_weather_conditions(data['weather'])
+        st.markdown("---")
 
-    st.markdown("---")
+        # KPIs Section
+        st.header("Key Performance Indicators")
+        kpis = calculate_kpis(data, live_mode=True)
+        st.markdown("---")
 
-    # Power Balance Section
-    st.header("Power Balance")
-    plot_power_balance(data)
+        # Forecasts Section
+        st.header("Forecasts")
+        col1, col2 = st.columns(2)
+        with col1:
+            plot_pv_forecast(data, live_mode=True)
+        with col2:
+            plot_load_forecast(data, live_mode=True)
 
-    # Tariff and Carbon Section
-    st.header("Tariff & Carbon Intensity")
-    plot_tariff_and_carbon(data)
+        st.markdown("---")
+
+        # Battery and Grid Section
+        st.header("Battery & Grid Operations")
+        col1, col2 = st.columns(2)
+        with col1:
+            plot_battery_soc(data, live_mode=True)
+        with col2:
+            plot_grid_flows(data, live_mode=True)
+
+        st.markdown("---")
+
+        # Power Balance Section
+        st.header("Power Balance")
+        plot_power_balance(data, live_mode=True)
+
+        # Tariff and Carbon Section
+        st.header("Tariff & Carbon Intensity")
+        plot_tariff_and_carbon(data, live_mode=True)
+
+    else:
+        # Historical mode - load from CSV files
+        data = load_data()
+
+        if not data:
+            st.warning("No data available. Please run the pipeline first.")
+            st.code("python data_prep/process_data.py\n"
+                    "python forecasting/pv_forecast.py\n"
+                    "python forecasting/load_forecast.py\n"
+                    "python optimization/mpc_solver.py\n"
+                    "python simulation/power_flow.py")
+            return
+
+        # KPIs Section
+        st.header("Key Performance Indicators")
+        kpis = calculate_kpis(data)
+        st.markdown("---")
+
+        # Forecasts Section
+        st.header("Forecasts")
+        col1, col2 = st.columns(2)
+        with col1:
+            plot_pv_forecast(data)
+        with col2:
+            plot_load_forecast(data)
+
+        st.markdown("---")
+
+        # Battery and Grid Section
+        st.header("Battery & Grid Operations")
+        col1, col2 = st.columns(2)
+        with col1:
+            plot_battery_soc(data)
+        with col2:
+            plot_grid_flows(data)
+
+        st.markdown("---")
+
+        # Power Balance Section
+        st.header("Power Balance")
+        plot_power_balance(data)
+
+        # Tariff and Carbon Section
+        st.header("Tariff & Carbon Intensity")
+        plot_tariff_and_carbon(data)
 
     # Footer
     st.markdown("---")
-    st.caption("Microgrid Autopilot v2.0 - Intelligent Energy Management System with Demand Charge Optimization")
+    st.caption("Microgrid Autopilot v3.0 - Real-Time Energy Management with Live Weather Forecasting")
 
 
 if __name__ == "__main__":
