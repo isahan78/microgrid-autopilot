@@ -1,334 +1,284 @@
 # Microgrid Autopilot
 
-An intelligent control system for optimizing PV + Battery + Load microgrids. This system forecasts solar generation and load demand, optimizes battery scheduling to minimize cost and carbon emissions, and provides real-time visualization through an interactive dashboard.
+**Intelligent energy management system for solar + battery microgrids using real-time optimization**
 
-## Features
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-- **Solar PV Forecasting**: XGBoost-based model using weather data, time features, and historical patterns
-- **Load Demand Forecasting**: XGBoost-based model with temperature and temporal features
-- **Battery Optimization**: MPC (Model Predictive Control) optimization with Pyomo or rule-based fallback
-- **Power Flow Simulation**: Calculates grid import/export, costs, and carbon emissions
-- **REST API**: FastAPI endpoints for programmatic control
-- **Interactive Dashboard**: Streamlit-based visualization of all KPIs and time series
+## Overview
 
-## Project Structure
+Microgrid Autopilot is a production-ready system that optimizes battery dispatch in solar+storage microgrids to minimize costs and carbon emissions. It combines machine learning forecasting with Model Predictive Control (MPC) for real-time decision making.
+
+### Key Features
+
+- **Live Weather Integration**: Fetches real-time weather from Open-Meteo API
+- **Hybrid Forecasting**: ML models (XGBoost) with physics-based fallback
+- **MPC Optimization**: Battery dispatch optimization with demand charge awareness
+- **Real-Time Dashboard**: Streamlit interface with live forecasting
+- **Production Ready**: Docker deployment, health checks, logging
+- **Zero Historical Data Required**: Physics models work out-of-the-box
+
+### System Architecture
 
 ```
-microgrid_autopilot/
-├── data_raw/                    # Raw input data
-│   ├── pv_raw.csv              # Solar generation data
-│   ├── load_raw.csv            # Load demand data
-│   ├── tariff_raw.csv          # Electricity tariff data
-│   ├── weather_raw.csv         # Weather data (GHI, DNI, temperature)
-│   └── carbon_raw.csv          # Carbon intensity data
-├── data_processed/              # Processed data and results
-│   ├── pv.csv                  # Processed PV data
-│   ├── load.csv                # Processed load data
-│   ├── tariff.csv              # TOU tariff schedule
-│   ├── weather.csv             # Processed weather data
-│   ├── carbon.csv              # Carbon intensity
-│   ├── forecast_pv.csv         # PV forecast results
-│   ├── forecast_load.csv       # Load forecast results
-│   ├── optimization_results.csv # Battery schedule
-│   └── power_flow.csv          # Power flow simulation
-├── data_prep/
-│   └── process_data.py         # Data processing pipeline
-├── forecasting/
-│   ├── pv_forecast.py          # PV forecasting model
-│   └── load_forecast.py        # Load forecasting model
-├── optimization/
-│   ├── mpc_solver.py           # MPC optimization solver
-│   └── fallback_rules.py       # Rule-based fallback control
-├── simulation/
-│   ├── battery_sim.py          # Battery SOC simulation
-│   └── power_flow.py           # Power flow calculations
-├── api/
-│   ├── main.py                 # FastAPI application
-│   ├── controller.py           # Business logic
-│   └── schemas.py              # Pydantic models
-├── dashboard/
-│   └── app.py                  # Streamlit dashboard
-├── tests/
-│   ├── test_data_pipeline.py   # Data processing tests
-│   ├── test_forecasting.py     # Forecasting tests
-│   └── test_mpc.py             # Optimization tests
-├── requirements.txt
-└── README.md
+┌─────────────────┐
+│  Live Weather   │
+│   (Open-Meteo)  │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐      ┌──────────────┐
+│  PV Forecast    │      │ Load Forecast│
+│  (Hybrid ML)    │      │  (Hybrid ML) │
+└────────┬────────┘      └──────┬───────┘
+         │                      │
+         └──────────┬───────────┘
+                    ▼
+         ┌──────────────────┐
+         │  MPC Optimizer   │
+         │   (Pyomo+HiGHS)  │
+         └─────────┬────────┘
+                   ▼
+         ┌──────────────────┐
+         │ Battery Dispatch │
+         │   + Dashboard    │
+         └──────────────────┘
 ```
 
-## Installation
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.8+
-- pip
+- Python 3.10+
+- Docker (optional, for containerized deployment)
 
-### Setup
+### Installation
 
-1. Clone or navigate to the project directory:
-```bash
+\`\`\`bash
+# Clone repository
+git clone https://github.com/isahan78/microgrid-autopilot.git
 cd microgrid-autopilot
-```
 
-2. Create and activate virtual environment:
-```bash
+# Create virtual environment
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+source venv/bin/activate  # On Windows: venv\\Scripts\\activate
 
-3. Install dependencies:
-```bash
+# Install dependencies
 pip install -r requirements.txt
-```
+\`\`\`
 
-4. (Optional) Install HiGHS solver for full MPC optimization:
-```bash
-pip install highspy
-```
+### Configuration
+
+Edit \`config.yaml\` to match your system:
+
+\`\`\`yaml
+# Battery configuration
+battery:
+  capacity_mwh: 10.0        # Battery size
+  max_power_mw: 4.0         # Max charge/discharge rate
+
+# PV system
+pv_system:
+  capacity_mw: 10.0         # Solar array size
+  model_type: "hybrid"      # physics, ml, or hybrid
+
+# Load profile
+load_profile:
+  base_load_mw: 3.0         # Average load
+  model_type: "hybrid"      # profile, ml, or hybrid
+
+# Location (for weather)
+weather:
+  latitude: 32.65           # Your location
+  longitude: -117.15
+\`\`\`
+
+### Run Dashboard
+
+\`\`\`bash
+# Option 1: Local
+streamlit run dashboard/app.py
+
+# Option 2: Docker
+docker-compose up -d
+
+# Access at http://localhost:8501
+\`\`\`
 
 ## Usage
 
-### Run the Complete Pipeline
+### Live Forecasting
 
-Execute all steps sequentially:
+1. Open dashboard: http://localhost:8501
+2. Select **"Live Forecast"** mode
+3. Click **"Run Live Forecast"**
+4. View optimized battery schedule and KPIs
 
-```bash
-# Activate virtual environment
-source venv/bin/activate
+### Training ML Models
 
-# 1. Process raw data
-python data_prep/process_data.py
+\`\`\`bash
+# Fetch 90 days of real historical weather data
+python utils/fetch_historical_data.py --days 90
 
-# 2. Generate PV forecast
-python forecasting/pv_forecast.py
+# Train models
+python forecasting/pv_forecast.py --retrain
+python forecasting/load_forecast.py --retrain
 
-# 3. Generate load forecast
-python forecasting/load_forecast.py
+# Models automatically used in hybrid mode
+\`\`\`
 
-# 4. Run optimization
-python optimization/mpc_solver.py
+## Model Performance
 
-# 5. Run power flow simulation
-python simulation/power_flow.py
-```
+Trained on 90 days of real San Diego weather data:
 
-### Launch Dashboard
+| Model | R² Score | MAE | Training Data |
+|-------|----------|-----|---------------|
+| PV Forecast | 0.9993 | 0.012 MW | 8,733 records |
+| Load Forecast | 0.9932 | 0.050 MW | 8,733 records |
 
-```bash
-streamlit run dashboard/app.py
-```
+## System Performance
 
-Open http://localhost:8501 in your browser.
-
-### Start API Server
-
-```bash
-uvicorn api.main:app --reload
-```
-
-API available at http://localhost:8000
-
-API documentation at http://localhost:8000/docs
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Health check |
-| `/health` | GET | Health check |
-| `/forecast` | POST | Generate PV and load forecasts |
-| `/optimize` | POST | Run battery optimization |
-| `/simulate` | POST | Run power flow simulation |
-| `/run` | POST | Execute complete pipeline |
-
-### Example API Usage
-
-```python
-import requests
-
-# Run complete pipeline
-response = requests.post("http://localhost:8000/run")
-result = response.json()
-
-print(f"Status: {result['status']}")
-print(f"Net Cost: ${result['kpis']['net_cost_usd']:.2f}")
-print(f"Cost Savings: ${result['comparison']['cost_savings_usd']:.2f}")
-```
-
-## System Parameters
-
-### Battery Configuration
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| Capacity | 5.0 MWh | Total battery capacity |
-| Max Power | 2.0 MW | Max charge/discharge rate |
-| Charge Efficiency | 95% | Charging efficiency |
-| Discharge Efficiency | 95% | Discharging efficiency |
-| Min SOC | 20% | Minimum state of charge |
-| Max SOC | 90% | Maximum state of charge |
-| Initial SOC | 50% | Starting state of charge |
-
-### TOU Tariff Schedule
-
-| Hours | Price ($/kWh) | Period |
-|-------|---------------|--------|
-| 00:00 - 17:00 | $0.12 | Off-peak |
-| 17:00 - 22:00 | $0.30 | Peak |
-| 22:00 - 24:00 | $0.15 | Mid-peak |
-
-## Performance Results
-
-### Model Performance
-
-| Model | R² Score | MAE | RMSE |
-|-------|----------|-----|------|
-| PV Forecast | 0.91 | 0.10 MW | 0.55 MW |
-| Load Forecast | 0.97 | 0.02 MW | 0.12 MW |
-
-### Sample 48-Hour Results
+Latest live forecast (48-hour horizon):
 
 | Metric | Value |
 |--------|-------|
-| Total PV Generation | 128.56 MWh |
-| Total Load | 233.12 MWh |
-| Grid Import | 128.98 MWh |
-| Grid Export | 25.27 MWh |
-| Net Cost | $21,867.21 |
-| Carbon Emissions | 52,879.89 kg CO2 |
-| Self-Consumption Rate | 80.3% |
-| Self-Sufficiency | 44.7% |
-| **Cost Savings vs Baseline** | **$1,300.26 (5.6%)** |
-| **Carbon Reduction** | **352.82 kg (0.7%)** |
+| PV Generation | 49.7 MWh |
+| Total Load | 133.2 MWh |
+| Self-Sufficiency | 38.5% |
+| Grid Import | 81.9 MWh |
+| Energy Cost | $13,428 |
+| Demand Charge | $6,942 |
+| **Net Cost** | **$20,370** |
+| Carbon Emissions | 33,598 kg CO2 |
 
-## Dashboard Visualizations
+## Docker Deployment
 
-The Streamlit dashboard provides:
+\`\`\`bash
+# Build and run
+docker-compose up -d
 
-- **KPI Summary**: Total generation, load, import/export, cost, carbon
-- **PV Forecast vs Actual**: Time series comparison
-- **Load Forecast vs Actual**: Time series comparison
-- **Battery SOC**: State of charge over time with min/max limits
-- **Grid Import/Export**: Power flows with the grid
-- **Power Balance**: Stacked area chart of all power sources
-- **Tariff Schedule**: TOU pricing visualization
+# Services:
+# - dashboard (port 8501): Streamlit interface
+# - api (port 8000): FastAPI backend
+# - scheduler: Rolling horizon MPC
+\`\`\`
 
-## Optimization Approach
+## API Reference
 
-### MPC Optimization
+### Health Check
+\`\`\`bash
+GET /health
 
-The system uses Model Predictive Control (MPC) to optimize battery scheduling:
+Response:
+{
+  "status": "healthy",
+  "version": "3.0.0",
+  "components": {
+    "pv_model": "ok",
+    "load_model": "ok"
+  }
+}
+\`\`\`
 
-**Objective Function:**
-```
-minimize Σ (price[t] × grid_import[t] + carbon_weight × carbon_intensity[t] × grid_import[t])
-```
+### System Status
+\`\`\`bash
+GET /status
+\`\`\`
 
-**Subject to:**
-- Power balance: `grid_import - grid_export = load - pv - battery_discharge + battery_charge`
-- SOC dynamics: `SOC[t+1] = SOC[t] + charge × efficiency - discharge / efficiency`
-- SOC limits: `0.2 ≤ SOC ≤ 0.9`
-- Power limits: `charge, discharge ≤ 2 MW`
+## Configuration Reference
 
-### Fallback Rules
+### Model Selection
 
-When no LP solver is available, the system uses rule-based control:
-- Charge battery with excess PV
-- Discharge during peak pricing (≥ $0.25/kWh)
-- Charge from grid during off-peak (< $0.15/kWh)
+\`\`\`yaml
+pv_system:
+  model_type: "hybrid"  # Options: physics, ml, hybrid
 
-## Data Sources
+load_profile:
+  model_type: "hybrid"  # Options: profile, ml, hybrid
+\`\`\`
 
-The system uses real-world data formats:
+- **physics/profile**: No training needed, works immediately
+- **ml**: Requires trained models (historical data)
+- **hybrid**: Uses ML if available, fallback to physics/profile
 
-- **PV Data**: NREL System Advisor Model (SAM) output
-- **Load Data**: ENTSO-E European power system data (scaled)
-- **Weather Data**: NSRDB (National Solar Radiation Database)
-- **Tariff**: Synthetic TOU based on typical utility rates
-- **Carbon**: Monthly average grid carbon intensity
+### Optimization Parameters
 
-## Testing
+\`\`\`yaml
+optimization:
+  horizon_hours: 48
+  demand_charge:
+    enabled: true
+    rate_per_kw: 15.0            # $/kW-month
+    peak_window_start: 12        # Hour
+    peak_window_end: 20
+\`\`\`
 
-Run the test suite:
+## Project Structure
 
-```bash
-# Install pytest
-pip install pytest
+\`\`\`
+microgrid-autopilot/
+├── api/                    # FastAPI backend
+├── dashboard/             # Streamlit interface
+├── forecasting/           # ML models
+├── optimization/          # MPC solver
+├── utils/                 # Utilities
+│   ├── weather_api.py    # Weather integration
+│   ├── pv_model.py       # Physics-based PV
+│   ├── logger.py         # Logging
+│   └── fetch_historical_data.py
+├── models/                # Trained ML models
+├── config.yaml           # Configuration
+└── docker-compose.yml
+\`\`\`
 
-# Run all tests
-pytest tests/ -v
+## Real Data Integration
 
-# Run specific test file
-pytest tests/test_mpc.py -v
-```
+### Your Own System
 
-## Dependencies
+\`\`\`bash
+# Replace synthetic data with your measurements
+# Save as: data_processed/pv.csv, load.csv, weather.csv
+# Then retrain:
+python forecasting/pv_forecast.py --retrain
+python forecasting/load_forecast.py --retrain
+\`\`\`
 
-Core dependencies:
-- `pandas` - Data manipulation
-- `numpy` - Numerical computing
-- `xgboost` - Machine learning models
-- `scikit-learn` - ML utilities
-- `pyomo` - Optimization modeling
-- `fastapi` - REST API
-- `uvicorn` - ASGI server
-- `streamlit` - Dashboard
-- `plotly` - Interactive visualizations
-- `pydantic` - Data validation
+### Public Datasets
+
+- **NREL NSRDB**: Solar data (use \`nsrdb_download.py\`)
+- **Pecan Street**: Building loads
+- **OpenEI**: Commercial profiles
 
 ## Troubleshooting
 
-### No LP Solver Available
+**Models Not Found:**
+\`\`\`bash
+python utils/fetch_historical_data.py --days 90
+python forecasting/pv_forecast.py --retrain
+\`\`\`
 
-If you see "No LP solver available, using fallback rules":
+**Optimization Fails:**
+- Check HiGHS solver: \`pip install highspy\`
+- Verify config.yaml values
+- Check logs in \`logs/\` directory
 
-```bash
-pip install highspy
-```
+## Contributing
 
-Or install GLPK:
-```bash
-# macOS
-brew install glpk
-
-# Ubuntu
-sudo apt-get install glpk-utils
-```
-
-### Module Not Found Errors
-
-Ensure you're running from the project root:
-```bash
-cd /path/to/microgrid-autopilot
-source venv/bin/activate
-```
-
-### Dashboard Not Loading
-
-Check that all pipeline steps have been run and data files exist in `data_processed/`.
-
-## Future Enhancements
-
-- [ ] Real-time data integration
-- [ ] Multi-day rolling horizon optimization
-- [ ] Demand response integration
-- [ ] EV charging optimization
-- [ ] Weather forecast API integration
-- [ ] Database persistence
-- [ ] User authentication
-- [ ] Configurable battery parameters via UI
+Contributions welcome! Fork, create feature branch, and open PR.
 
 ## License
 
-MIT License
+MIT License - see LICENSE file
 
 ## Acknowledgments
 
-- NREL for PV modeling tools and NSRDB data
-- ENTSO-E for European power system data
-- XGBoost team for the gradient boosting library
-- Pyomo team for optimization modeling
+- Weather: Open-Meteo Archive API
+- Optimization: Pyomo + HiGHS
+- ML: XGBoost, scikit-learn
+- Dashboard: Streamlit, Plotly
 
 ---
 
-**Microgrid Autopilot v1.0** - Intelligent Energy Management System
+**Status**: Production Ready ✅
+
+Last Updated: November 2025
