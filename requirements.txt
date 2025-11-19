@@ -1,0 +1,12 @@
+pandas
+numpy
+xgboost
+scikit-learn
+pyomo
+ortools
+fastapi
+uvicorn
+streamlit
+plotly
+pydantic
+python-dotenv
