@@ -81,8 +81,23 @@ carbon:
     22: 1.00
     23: 0.90
 
+weather:
+  # Location for weather forecasts (San Diego, CA default)
+  latitude: 32.65
+  longitude: -117.15
+  timezone: "America/Los_Angeles"
+
+  # API settings
+  use_live_forecast: true      # Set to false to use historical data
+  cache_hours: 1               # How long to cache API responses
+  forecast_days: 2             # Days to forecast (1-16)
+
+  # Fallback to historical data if API fails
+  fallback_to_historical: true
+
 paths:
   data_raw: "data_raw"
   data_processed: "data_processed"
   models: "models"
   results: "results"
+  cache: "cache"
