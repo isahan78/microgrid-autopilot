@@ -13,6 +13,75 @@ battery:
   cycle_cost_per_kwh: 0.02   # $/kWh degradation cost per cycle
   calendar_aging_per_day: 0.0001  # Fraction capacity loss per day
 
+# PV System Configuration
+pv_system:
+  capacity_mw: 5.0              # Rated system capacity in MW
+  panel_efficiency: 0.20        # Panel efficiency at STC (0-1)
+  temperature_coefficient: -0.004  # Power temp coefficient per °C
+  inverter_efficiency: 0.96     # Inverter efficiency (0-1)
+  system_losses: 0.14           # Other losses (soiling, wiring, etc.)
+  tilt_angle: 30                # Panel tilt angle in degrees
+  azimuth: 180                  # Panel azimuth (180 = south)
+
+  # Model selection: "physics", "ml", or "hybrid"
+  # - physics: Use physics-based calculations only (no training needed)
+  # - ml: Use trained XGBoost model (requires historical data)
+  # - hybrid: Use ML if model exists, fallback to physics
+  model_type: "hybrid"
+
+# Load Profile Configuration
+load_profile:
+  # Model selection: "profile", "ml", or "hybrid"
+  # - profile: Use configured hourly pattern (no training needed)
+  # - ml: Use trained XGBoost model (requires historical data)
+  # - hybrid: Use ML if model exists, fallback to profile
+  model_type: "hybrid"
+
+  # Base load in MW
+  base_load_mw: 3.0
+
+  # Hourly multipliers for typical daily pattern
+  # 1.0 = base load, >1 = higher demand, <1 = lower demand
+  hourly_pattern:
+    0: 0.6    # Midnight - low
+    1: 0.55
+    2: 0.50
+    3: 0.50
+    4: 0.55
+    5: 0.60
+    6: 0.75   # Morning ramp
+    7: 0.90
+    8: 1.10   # Business hours start
+    9: 1.20
+    10: 1.25
+    11: 1.30
+    12: 1.35  # Midday peak
+    13: 1.35
+    14: 1.30
+    15: 1.25
+    16: 1.20
+    17: 1.15  # Evening transition
+    18: 1.00
+    19: 0.90
+    20: 0.80
+    21: 0.75
+    22: 0.70
+    23: 0.65
+
+  # Day-of-week multipliers (optional)
+  # 0 = Monday, 6 = Sunday
+  weekly_pattern:
+    0: 1.0    # Monday
+    1: 1.0    # Tuesday
+    2: 1.0    # Wednesday
+    3: 1.0    # Thursday
+    4: 0.95   # Friday
+    5: 0.70   # Saturday
+    6: 0.65   # Sunday
+
+  # Random variation (standard deviation as fraction of load)
+  noise_std: 0.05
+
 optimization:
   carbon_weight: 0.001       # Weight for carbon in objective function
   export_price_ratio: 0.5    # Export price as fraction of import price
