@@ -1,0 +1,86 @@
+# Microgrid Autopilot - Docker Compose Configuration
+# Production deployment with dashboard and API services
+
+version: '3.8'
+
+services:
+  # Streamlit Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: microgrid-dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data_processed:/app/data_processed:ro
+      - ./models:/app/models:ro
+      - ./config.yaml:/app/config.yaml:ro
+      - results_data:/app/results
+      - cache_data:/app/cache
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - STREAMLIT_SERVER_HEADLESS=true
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # FastAPI Backend (optional - for API access)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: microgrid-api
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data_processed:/app/data_processed:ro
+      - ./models:/app/models:ro
+      - ./config.yaml:/app/config.yaml:ro
+      - results_data:/app/results
+      - cache_data:/app/cache
+    environment:
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Rolling MPC Scheduler (runs optimization periodically)
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: microgrid-scheduler
+    command: ["python", "optimization/rolling_mpc.py", "--interval", "15", "--horizon", "48", "--duration", "24", "--realtime"]
+    volumes:
+      - ./data_processed:/app/data_processed:ro
+      - ./models:/app/models:ro
+      - ./config.yaml:/app/config.yaml:ro
+      - results_data:/app/results
+      - cache_data:/app/cache
+    environment:
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    depends_on:
+      - dashboard
+
+volumes:
+  results_data:
+    driver: local
+  cache_data:
+    driver: local
+
+networks:
+  default:
+    name: microgrid-network
