@@ -2,8 +2,8 @@
 # All parameters are configurable for different system deployments
 
 battery:
-  capacity_mwh: 5.0          # Total battery capacity in MWh
-  max_power_mw: 2.0          # Max charge/discharge power in MW
+  capacity_mwh: 10.0         # Total battery capacity in MWh
+  max_power_mw: 4.0          # Max charge/discharge power in MW
   charge_efficiency: 0.95    # Charging efficiency (0-1)
   discharge_efficiency: 0.95 # Discharging efficiency (0-1)
   soc_min: 0.20              # Minimum state of charge (0-1)
@@ -15,7 +15,7 @@ battery:
 
 # PV System Configuration
 pv_system:
-  capacity_mw: 5.0              # Rated system capacity in MW
+  capacity_mw: 10.0             # Rated system capacity in MW
   panel_efficiency: 0.20        # Panel efficiency at STC (0-1)
   temperature_coefficient: -0.004  # Power temp coefficient per °C
   inverter_efficiency: 0.96     # Inverter efficiency (0-1)
