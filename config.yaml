@@ -1,0 +1,88 @@
+# Microgrid Autopilot Configuration
+# All parameters are configurable for different system deployments
+
+battery:
+  capacity_mwh: 5.0          # Total battery capacity in MWh
+  max_power_mw: 2.0          # Max charge/discharge power in MW
+  charge_efficiency: 0.95    # Charging efficiency (0-1)
+  discharge_efficiency: 0.95 # Discharging efficiency (0-1)
+  soc_min: 0.20              # Minimum state of charge (0-1)
+  soc_max: 0.90              # Maximum state of charge (0-1)
+  soc_initial: 0.50          # Initial state of charge (0-1)
+  # Degradation parameters (for future use)
+  cycle_cost_per_kwh: 0.02   # $/kWh degradation cost per cycle
+  calendar_aging_per_day: 0.0001  # Fraction capacity loss per day
+
+optimization:
+  carbon_weight: 0.001       # Weight for carbon in objective function
+  export_price_ratio: 0.5    # Export price as fraction of import price
+  solver_timeout_seconds: 300  # Max time for solver
+  horizon_hours: 48          # Optimization lookahead
+
+  # Demand charge parameters
+  demand_charge:
+    enabled: true
+    rate_per_kw: 15.0        # $/kW-month demand charge
+    billing_period_days: 30  # Days in billing period
+    peak_window_start: 12    # Hour when demand charge window starts
+    peak_window_end: 20      # Hour when demand charge window ends
+
+tariff:
+  # Time-of-Use schedule (can be overridden by tariff.csv)
+  off_peak:
+    hours: [0, 17]           # 00:00 - 17:00
+    price_per_kwh: 0.12
+  peak:
+    hours: [17, 22]          # 17:00 - 22:00
+    price_per_kwh: 0.30
+  mid_peak:
+    hours: [22, 24]          # 22:00 - 24:00
+    price_per_kwh: 0.15
+
+forecasting:
+  pv:
+    model_path: "models/pv_model.joblib"
+    retrain_interval_days: 7
+    min_training_samples: 100
+  load:
+    model_path: "models/load_model.joblib"
+    retrain_interval_days: 7
+    min_training_samples: 100
+
+carbon:
+  # Default carbon intensity if not provided in data
+  default_intensity: 410     # g CO2/kWh
+  # Time-varying carbon intensity schedule (optional)
+  use_time_varying: true
+  # Hour-based multipliers for grid carbon intensity
+  hourly_multipliers:
+    0: 0.85    # Night - lower emissions (more renewables curtailed, baseload)
+    1: 0.82
+    2: 0.80
+    3: 0.78
+    4: 0.80
+    5: 0.85
+    6: 0.95    # Morning ramp
+    7: 1.05
+    8: 1.10
+    9: 1.05
+    10: 0.95   # Solar coming online
+    11: 0.85
+    12: 0.80
+    13: 0.75   # Peak solar
+    14: 0.75
+    15: 0.80
+    16: 0.90
+    17: 1.10   # Evening peak - gas peakers
+    18: 1.20
+    19: 1.25   # Peak emissions
+    20: 1.20
+    21: 1.10
+    22: 1.00
+    23: 0.90
+
+paths:
+  data_raw: "data_raw"
+  data_processed: "data_processed"
+  models: "models"
+  results: "results"

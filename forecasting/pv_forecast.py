@@ -1,22 +1,40 @@
 """
 PV forecast module for Microgrid Autopilot.
 
-Uses XGBoost to forecast solar generation.
+Uses XGBoost to forecast solar generation with model persistence.
 """
 
 import pandas as pd
 import numpy as np
 from pathlib import Path
+import sys
+import joblib
 from xgboost import XGBRegressor
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import warnings
 warnings.filterwarnings('ignore')
 
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from utils.config import get_config
+
+
+# Load configuration
+config = get_config()
 
 # Paths
-PROCESSED_DIR = Path(__file__).parent.parent / "data_processed"
-OUTPUT_DIR = Path(__file__).parent.parent / "data_processed"
+PROJECT_DIR = Path(__file__).parent.parent
+PROCESSED_DIR = PROJECT_DIR / config.paths.get('data_processed', 'data_processed')
+OUTPUT_DIR = PROCESSED_DIR
+MODELS_DIR = PROJECT_DIR / config.paths.get('models', 'models')
+
+# Ensure models directory exists
+MODELS_DIR.mkdir(exist_ok=True)
+
+# Model file path
+MODEL_PATH = MODELS_DIR / "pv_model.joblib"
+FEATURE_COLS_PATH = MODELS_DIR / "pv_feature_cols.joblib"
 
 
 def create_pv_features(df, weather_df):
@@ -56,8 +74,8 @@ def create_pv_features(df, weather_df):
     return data
 
 
-def train_pv_model(data):
-    """Train XGBoost model for PV forecasting."""
+def train_pv_model(data, force_retrain=False):
+    """Train XGBoost model for PV forecasting with persistence."""
     # Define features
     feature_cols = [
         'ghi', 'dni', 'temperature',
@@ -66,6 +84,14 @@ def train_pv_model(data):
         'pv_rolling_mean_4', 'pv_rolling_std_4',
         'ghi_dni_ratio', 'temp_squared'
     ]
+
+    # Check if model already exists
+    if MODEL_PATH.exists() and FEATURE_COLS_PATH.exists() and not force_retrain:
+        print("  Loading existing model from disk...")
+        model = joblib.load(MODEL_PATH)
+        saved_feature_cols = joblib.load(FEATURE_COLS_PATH)
+        print(f"  Model loaded from {MODEL_PATH}")
+        return model, saved_feature_cols
 
     # Remove rows with NaN (due to lag features)
     data_clean = data.dropna()
@@ -104,6 +130,11 @@ def train_pv_model(data):
     print(f"    RMSE: {rmse:.4f} MW")
     print(f"    R2:   {r2:.4f}")
 
+    # Save model
+    joblib.dump(model, MODEL_PATH)
+    joblib.dump(feature_cols, FEATURE_COLS_PATH)
+    print(f"  Model saved to {MODEL_PATH}")
+
     return model, feature_cols
 
 
@@ -131,7 +162,7 @@ def generate_forecast(model, data, feature_cols):
     return data
 
 
-def main():
+def main(force_retrain=False):
     """Run PV forecasting pipeline."""
     print("=" * 50)
     print("MICROGRID AUTOPILOT - PV Forecasting")
@@ -149,9 +180,9 @@ def main():
     print("\nCreating features...")
     data = create_pv_features(pv_df, weather_df)
 
-    # Train model
-    print("\nTraining XGBoost model...")
-    model, feature_cols = train_pv_model(data)
+    # Train model (or load existing)
+    print("\nPreparing model...")
+    model, feature_cols = train_pv_model(data, force_retrain=force_retrain)
 
     # Generate forecast
     print("\nGenerating forecast...")
@@ -174,4 +205,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--retrain', action='store_true', help='Force model retraining')
+    args = parser.parse_args()
+    main(force_retrain=args.retrain)

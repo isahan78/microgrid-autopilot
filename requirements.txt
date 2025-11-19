@@ -10,3 +10,6 @@ streamlit
 plotly
 pydantic
 python-dotenv
+highspy
+joblib
+pyyaml
